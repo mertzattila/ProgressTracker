@@ -30,7 +30,7 @@ edzővel**.
 - A gyakorlatok **kipipálhatók** egyértelmű vizuális visszajelzéssel; a nap
   elkészültekor ünneplő állapot jelenik meg.
 
-### 3. Beépített AI asszisztens (AI Coach)
+### 3. AI asszisztens (AI Coach) — **Gemini** támogatással
 - Dedikált **AI Coach oldal** + a képernyő sarkából megnyitható **lebegő
   chat widget**.
 - Ismeri az aktuális célokat és az aznapi edzéstervet.
@@ -39,6 +39,27 @@ edzővel**.
   (pl. _„Túl nehéz volt a mai front lever, tegyünk könnyebb rávezetőket”_).
 - Az AI javaslatai **egy kattintással alkalmazhatók** (könnyítés/nehezítés,
   deload nap).
+- **Két motor, zökkenőmentesen:**
+  - **Google Gemini** (`gemini-2.5-pro` / `gemini-2.5-flash`), ha megadsz egy
+    API kulcsot az _AI beállítások_ ablakban;
+  - **beépített, offline szabály-alapú motor**, ha nincs kulcs — vagy ha a
+    Gemini hibázna (automatikus fallback).
+
+#### 🔑 Gemini API kulcs — „Bring Your Own Key"
+Mivel ez egy **tisztán statikus** frontend (GitHub Pages, nincs backend), az
+API kulcs **csak a te böngésződ `localStorage`-ában** tárolódik — soha nem
+kerül a repóba, nem égetődik be a kódba, és nem látja más.
+
+1. Igényelj kulcsot: <https://aistudio.google.com/apikey>
+2. Az appban: **AI Coach → ⚙ (AI beállítások)** → illeszd be a kulcsot,
+   válassz modellt, kapcsold be a _„Gemini használata"_ opciót.
+3. A **„Kapcsolat teszt"** gombbal ellenőrizheted, majd **Mentés**.
+
+> ⚠️ Statikus oldalon **nincs mód** a kulcs valódi elrejtésére (a böngészőben
+> futó kód mindig látja, amit hív). A GitHub _Secrets_ csak build/CI időben
+> érhető el, a felhasználó böngészőjében nem — ezért a BYO-key minta a
+> helyes megoldás itt. Ha közös, rejtett kulcs kell, egy kis backend proxy
+> (pl. Cloudflare Worker / Vercel Function) szükséges.
 
 ---
 
@@ -78,7 +99,8 @@ vagy bármely statikus szerverrel (`npx serve`, VS Code Live Server, stb.).
 └── src/
     ├── data.js         # erőelem/gyakorlat tudásbázis + progressziók
     ├── planner.js      # ütemező & progressziós motor (tiszta függvények)
-    ├── coach.js        # AI Coach motor (intent-felismerés + válaszok)
+    ├── gemini.js       # Gemini API kliens (böngészőből, BYO key)
+    ├── coach.js        # AI Coach motor (Gemini + offline fallback)
     ├── store.js        # állapotkezelés (reducer + localStorage hook)
     ├── components.js    # újrahasznosítható UI komponensek + ikonok
     └── app.js          # alkalmazás-váz, oldalak, navigáció, chat widget

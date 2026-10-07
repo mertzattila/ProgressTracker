@@ -32,6 +32,12 @@ window.CF = window.CF || {};
     // deload days: set of dateISO -> true
     deload: {},
     chat: [],
+    // AI settings — API key lives ONLY in this visitor's localStorage.
+    settings: {
+      apiKey: "",
+      model: "gemini-2.5-pro",
+      useGemini: false,
+    },
   };
 
   function load() {
@@ -39,7 +45,12 @@ window.CF = window.CF || {};
       const raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return initialState;
       const parsed = JSON.parse(raw);
-      return { ...initialState, ...parsed };
+      return {
+        ...initialState,
+        ...parsed,
+        // deep-merge settings so new fields get defaults
+        settings: { ...initialState.settings, ...(parsed.settings || {}) },
+      };
     } catch {
       return initialState;
     }
@@ -101,8 +112,19 @@ window.CF = window.CF || {};
       case "CHAT_PUSH": {
         return { ...state, chat: [...state.chat, action.message] };
       }
+      case "CHAT_UPDATE": {
+        return {
+          ...state,
+          chat: state.chat.map((m) =>
+            m.id === action.id ? { ...m, ...action.patch } : m
+          ),
+        };
+      }
       case "CHAT_CLEAR": {
         return { ...state, chat: [] };
+      }
+      case "SET_SETTINGS": {
+        return { ...state, settings: { ...state.settings, ...action.patch } };
       }
       case "RESET_ALL":
         return initialState;
@@ -134,7 +156,9 @@ window.CF = window.CF || {};
         deloadToday: (dateISO) => dispatch({ type: "DELOAD_TODAY", dateISO }),
         clearDeload: (dateISO) => dispatch({ type: "CLEAR_DELOAD", dateISO }),
         chatPush: (message) => dispatch({ type: "CHAT_PUSH", message }),
+        chatUpdate: (id, patch) => dispatch({ type: "CHAT_UPDATE", id, patch }),
         chatClear: () => dispatch({ type: "CHAT_CLEAR" }),
+        setSettings: (patch) => dispatch({ type: "SET_SETTINGS", patch }),
         resetAll: () => dispatch({ type: "RESET_ALL" }),
       }),
       []

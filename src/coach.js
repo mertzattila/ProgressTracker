@@ -1,17 +1,20 @@
 /* ===========================================================================
  * CaliForge — AI Coach engine
  * ---------------------------------------------------------------------------
- * A context-aware, intent-driven assistant. In this sandbox there is no
- * outbound network access to an LLM, so the coach is implemented as a
- * deterministic reasoning engine that:
- *   - understands the athlete's current goals and today's workout (context);
- *   - classifies the user's message intent (injury, difficulty, form,
- *     nutrition, motivation, plan question, greeting);
- *   - optionally proposes an on-the-fly plan modification the UI can apply.
+ * A context-aware, intent-driven assistant with TWO interchangeable engines:
+ *   1. Google Gemini (src/gemini.js) when the user has configured an API key;
+ *   2. a deterministic, offline rule engine as the default + automatic
+ *      fallback whenever Gemini is off or errors out.
  *
- * The public API intentionally mirrors a chat-completion call so that swapping
- * in a real LLM later is a drop-in change:
- *     CF.coach.respond({ message, context })  ->  { text, action? }
+ * Both engines share the same contract and understand the athlete's current
+ * goals and today's workout. They can:
+ *   - answer questions (form, injury, nutrition, rest, motivation, plan);
+ *   - propose an on-the-fly plan modification the UI can apply with one click
+ *     (DELOAD_TODAY / REGRESS_GOAL / PROGRESS_GOAL).
+ *
+ * Public API (async):
+ *     await CF.coach.respond({ message, context, settings })
+ *       -> { text, action?, intent?, source: "gemini"|"rules"|"fallback", error? }
  * ========================================================================= */
 
 window.CF = window.CF || {};
@@ -244,8 +247,8 @@ window.CF = window.CF || {};
     };
   }
 
-  /* ---- public API -------------------------------------------------------- */
-  function respond({ message, context }) {
+  /* ---- rule-based engine (offline fallback) ------------------------------ */
+  function ruleRespond({ message, context }) {
     const goals = (context && context.goals) || [];
     const todayWorkout = context && context.todayWorkout;
     const intent = detectIntent(message);
@@ -275,5 +278,97 @@ window.CF = window.CF || {};
     }
   }
 
-  window.CF.coach = { respond, detectIntent };
+  /* ---- context → system prompt (for Gemini) ------------------------------ */
+  function buildSystemPrompt(context) {
+    const goals = (context && context.goals) || [];
+    const todayWorkout = context && context.todayWorkout;
+
+    const goalLines = goals.length
+      ? goals
+          .map((g) => {
+            const s = SKILL_BY_ID[g.skillId];
+            const rem = window.CF.planner.formatRemaining(g.targetDate);
+            const idx = window.CF.planner.currentStepIndex(g);
+            const step = s ? s.progressions[idx] : null;
+            return `- goalId=${g.id} | ${s ? s.label : g.skillId} (${s ? s.category : "?"}) | céldátum: ${g.targetDate} | hátralévő: ${rem.label} | aktuális rávezető: ${step ? step.name : "-"}`;
+          })
+          .join("\n")
+      : "(nincs aktív cél)";
+
+    let todayLines = "(nincs betöltött mai edzés)";
+    if (todayWorkout) {
+      if (todayWorkout.isRest) {
+        todayLines = "Ma pihenőnap (mobilitás, könnyű core).";
+      } else {
+        const mains = todayWorkout.entries
+          .filter((e) => e.phase === "main")
+          .map((e) => `- ${e.name}: ${e.prescription}`)
+          .join("\n");
+        todayLines = `Mai nap témája: ${window.CF.planner.dayThemeLabel(todayWorkout.themes)}\n${mains}`;
+      }
+    }
+
+    return [
+      "Te a CaliForge AI edzője vagy: tapasztalt, barátságos calisthenics coach.",
+      "MINDIG magyarul válaszolj, tömören, gyakorlatiasan, bátorítóan.",
+      "Specializáció: statikus erőelemek (Front Lever, Planche, Muscle-up, Human Flag, Handstand, L-sit, Pistol squat) és a rávezető progressziók.",
+      "",
+      "FONTOS SZABÁLYOK:",
+      "- Nem adsz orvosi diagnózist. Éles/tartós fájdalomnál javasold a terhelés csökkentését és szakember felkeresését.",
+      "- Ha a felhasználó edzésterv-módosítást kér vagy az indokolt, töltsd ki az 'action' mezőt:",
+      "  • DELOAD_TODAY – a mai edzés könnyítése/kímélő mód (sérülés, fáradtság).",
+      "  • REGRESS_GOAL – egy célt könnyebb rávezetőre léptetsz (goalId kötelező), ha túl nehéz.",
+      "  • PROGRESS_GOAL – egy célt nehezebb rávezetőre léptetsz (goalId kötelező), ha túl könnyű.",
+      "  • NONE / action nélkül – ha csak kérdésre válaszolsz, nincs tervváltozás.",
+      "- Az 'action.label' legyen rövid, kattintható magyar gombfelirat.",
+      "- Csak a lenti listában szereplő goalId-t használj.",
+      "",
+      "A FELHASZNÁLÓ AKTUÁLIS CÉLJAI:",
+      goalLines,
+      "",
+      "A MAI EDZÉSTERV:",
+      todayLines,
+    ].join("\n");
+  }
+
+  /* ---- public API (async) ------------------------------------------------ */
+  /**
+   * Primary entry point. If a Gemini API key is configured it uses Gemini
+   * (with full goal + today's-workout context); otherwise, or on any error,
+   * it transparently falls back to the deterministic rule engine.
+   *
+   * @returns {Promise<{text:string, action?:object, intent?:string, source:string, error?:string}>}
+   */
+  async function respond({ message, context, settings }) {
+    const useGemini =
+      settings && settings.useGemini && settings.apiKey && window.CF.gemini;
+
+    if (useGemini) {
+      try {
+        const system = buildSystemPrompt(context);
+        const history = (context && context.history) || [];
+        const res = await window.CF.gemini.generate({
+          apiKey: settings.apiKey,
+          model: settings.model,
+          system,
+          history,
+          message,
+        });
+        return { ...res, source: "gemini" };
+      } catch (e) {
+        // Graceful fallback: answer with the rule engine but surface the error.
+        const fallback = ruleRespond({ message, context });
+        return {
+          ...fallback,
+          source: "fallback",
+          error: e && e.message ? e.message : String(e),
+        };
+      }
+    }
+
+    const r = ruleRespond({ message, context });
+    return { ...r, source: "rules" };
+  }
+
+  window.CF.coach = { respond, ruleRespond, detectIntent, buildSystemPrompt };
 })();

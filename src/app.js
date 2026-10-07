@@ -490,22 +490,42 @@
     const todayWorkout = useMemo(() => buildDay(state, todayIdx, dateISO, now), [state, dateISO, now]);
 
     const send = useCallback(
-      (text) => {
+      async (text) => {
         const trimmed = text.trim();
         if (!trimmed) return;
-        actions.chatPush({ id: Date.now() + "u", role: "user", text: trimmed, ts: Date.now() });
-        const res = CF.coach.respond({ message: trimmed, context: { goals: state.goals, todayWorkout } });
-        setTimeout(() => {
-          actions.chatPush({
-            id: Date.now() + "a",
-            role: "assistant",
-            text: res.text,
-            action: res.action || null,
-            ts: Date.now(),
+
+        const userMsg = { id: Date.now() + "u", role: "user", text: trimmed, ts: Date.now() };
+        const pendingId = Date.now() + "a";
+        actions.chatPush(userMsg);
+        // Typing placeholder (replaced in-place once the answer arrives).
+        actions.chatPush({ id: pendingId, role: "assistant", text: "", pending: true, ts: Date.now() });
+
+        // Pass recent history so Gemini has conversational memory.
+        const history = state.chat
+          .filter((m) => m.role === "user" || m.role === "assistant")
+          .slice(-8)
+          .map((m) => ({ role: m.role, text: m.text }));
+
+        let res;
+        try {
+          res = await CF.coach.respond({
+            message: trimmed,
+            context: { goals: state.goals, todayWorkout, history },
+            settings: state.settings,
           });
-        }, 350);
+        } catch (e) {
+          res = { text: "Hiba történt a válasz közben: " + (e && e.message ? e.message : e), source: "error" };
+        }
+
+        actions.chatUpdate(pendingId, {
+          text: res.text,
+          action: res.action || null,
+          pending: false,
+          source: res.source,
+          error: res.error || null,
+        });
       },
-      [actions, state.goals, todayWorkout]
+      [actions, state.goals, state.chat, state.settings, todayWorkout]
     );
 
     const applyAction = useCallback(
@@ -516,10 +536,10 @@
             actions.deloadToday(dateISO);
             break;
           case "REGRESS_GOAL":
-            actions.regressGoal(action.goalId);
+            if (action.goalId) actions.regressGoal(action.goalId);
             break;
           case "PROGRESS_GOAL":
-            actions.progressGoal(action.goalId);
+            if (action.goalId) actions.progressGoal(action.goalId);
             break;
         }
         actions.chatPush({
@@ -586,7 +606,11 @@
             ? "bg-gradient-to-r from-neon-violet to-neon-blue text-white"
             : "border border-white/10 bg-base-700/80 text-slate-100"
         }`}>
-          <div className="whitespace-pre-wrap">{msg.text}</div>
+          {msg.pending ? (
+            <TypingDots />
+          ) : (
+            <div className="whitespace-pre-wrap">{msg.text}</div>
+          )}
           {msg.action && (
             <button
               onClick={() => onApply(msg.action)}
@@ -595,7 +619,31 @@
               <Icon.Check className="h-3.5 w-3.5" /> {msg.action.label}
             </button>
           )}
+          {!isUser && !msg.pending && msg.source === "fallback" && (
+            <div className="mt-2 border-t border-white/10 pt-2 text-[11px] text-amber-300/90">
+              ⚠️ A Gemini nem válaszolt ({msg.error}), ezért a beépített motor felelt.
+            </div>
+          )}
+          {!isUser && !msg.pending && msg.source === "gemini" && (
+            <div className="mt-2 flex items-center gap-1 text-[10px] text-slate-500">
+              <Icon.Sparkle className="h-3 w-3 text-neon-violet" /> Gemini
+            </div>
+          )}
         </div>
+      </div>
+    );
+  }
+
+  function TypingDots() {
+    return (
+      <div className="flex items-center gap-1 py-1">
+        {[0, 150, 300].map((d) => (
+          <span
+            key={d}
+            className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400"
+            style={{ animationDelay: `${d}ms` }}
+          />
+        ))}
       </div>
     );
   }
@@ -622,14 +670,172 @@
     );
   }
 
+  /* ---- AI settings (Gemini bring-your-own-key) -------------------------- */
+  function AISettingsModal({ open, onClose, settings, onSave }) {
+    const [apiKey, setApiKey] = useState(settings.apiKey || "");
+    const [model, setModel] = useState(settings.model || "gemini-2.5-pro");
+    const [useGemini, setUseGemini] = useState(!!settings.useGemini);
+    const [reveal, setReveal] = useState(false);
+    const [testState, setTestState] = useState({ status: "idle", msg: "" });
+
+    useEffect(() => {
+      if (open) {
+        setApiKey(settings.apiKey || "");
+        setModel(settings.model || "gemini-2.5-pro");
+        setUseGemini(!!settings.useGemini);
+        setTestState({ status: "idle", msg: "" });
+      }
+    }, [open, settings]);
+
+    async function runTest() {
+      if (!apiKey.trim()) {
+        setTestState({ status: "error", msg: "Előbb add meg az API kulcsot." });
+        return;
+      }
+      setTestState({ status: "loading", msg: "Kapcsolat tesztelése…" });
+      try {
+        await CF.gemini.testKey({ apiKey: apiKey.trim(), model });
+        setTestState({ status: "ok", msg: "Sikeres kapcsolat! A kulcs működik. ✅" });
+      } catch (e) {
+        setTestState({ status: "error", msg: (e && e.message) || "Ismeretlen hiba." });
+      }
+    }
+
+    function save() {
+      onSave({ apiKey: apiKey.trim(), model, useGemini: useGemini && !!apiKey.trim() });
+      onClose();
+    }
+
+    function clearKey() {
+      setApiKey("");
+      setUseGemini(false);
+      onSave({ apiKey: "", model, useGemini: false });
+      setTestState({ status: "idle", msg: "Kulcs törölve ebből a böngészőből." });
+    }
+
+    return (
+      <Modal open={open} onClose={onClose} title="AI beállítások — Gemini">
+        <div className="space-y-5">
+          <div className="rounded-xl border border-neon-blue/20 bg-neon-blue/5 p-3 text-xs leading-relaxed text-slate-300">
+            🔒 A kulcsod <b>csak ebben a böngészőben</b> (localStorage) tárolódik — nem kerül a szerverre, a repóba, és nem látja senki más. A hívás közvetlenül a Google Gemini API-hoz megy.
+          </div>
+
+          <div>
+            <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-400">
+              Gemini API kulcs
+            </label>
+            <div className="flex items-center gap-2">
+              <div className="relative flex-1">
+                <input
+                  type={reveal ? "text" : "password"}
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  placeholder="AIza…"
+                  autoComplete="off"
+                  spellCheck={false}
+                  className="w-full rounded-xl border border-white/10 bg-base-700 px-3.5 py-3 pr-10 text-sm text-slate-100 placeholder-slate-500 focus:border-neon-violet/60 focus:outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => setReveal((r) => !r)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1.5 text-slate-400 hover:text-slate-200"
+                  title={reveal ? "Elrejtés" : "Megjelenítés"}
+                >
+                  {reveal ? <Icon.EyeOff className="h-4 w-4" /> : <Icon.Eye className="h-4 w-4" />}
+                </button>
+              </div>
+            </div>
+            <p className="mt-1.5 text-xs text-slate-500">
+              Kulcs igénylése:{" "}
+              <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" className="text-neon-blue hover:underline">
+                aistudio.google.com/apikey
+              </a>
+            </p>
+          </div>
+
+          <div>
+            <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-400">Modell</label>
+            <select
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              className="w-full rounded-xl border border-white/10 bg-base-700 px-3.5 py-3 text-sm text-slate-100 focus:border-neon-violet/60 focus:outline-none"
+            >
+              {CF.gemini.MODELS.map((m) => (
+                <option key={m.id} value={m.id}>{m.label}</option>
+              ))}
+            </select>
+          </div>
+
+          <label className="flex items-center gap-3 rounded-xl border border-white/10 bg-base-700/50 p-3.5 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={useGemini}
+              onChange={(e) => setUseGemini(e.target.checked)}
+              className="h-4 w-4 accent-neon-violet"
+            />
+            <span className="text-sm">
+              <span className="font-semibold">Gemini használata</span>
+              <span className="block text-xs text-slate-400">Ha ki van kapcsolva, a beépített (offline) edző motor válaszol.</span>
+            </span>
+          </label>
+
+          {testState.msg && (
+            <div className={`rounded-lg px-3 py-2 text-xs ${
+              testState.status === "ok" ? "border border-neon-green/30 bg-neon-green/10 text-neon-green"
+              : testState.status === "error" ? "border border-rose-500/30 bg-rose-500/10 text-rose-300"
+              : "border border-white/10 bg-base-700/60 text-slate-300"
+            }`}>
+              {testState.msg}
+            </div>
+          )}
+
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+            <div className="flex gap-2">
+              <Button type="button" variant="ghost" onClick={runTest} disabled={testState.status === "loading"}>
+                {testState.status === "loading" ? "Tesztelés…" : "Kapcsolat teszt"}
+              </Button>
+              {settings.apiKey && (
+                <Button type="button" variant="danger" onClick={clearKey}>Kulcs törlése</Button>
+              )}
+            </div>
+            <Button type="button" onClick={save}>Mentés</Button>
+          </div>
+        </div>
+      </Modal>
+    );
+  }
+
+  function CoachStatusPill({ settings, onOpen }) {
+    const active = settings.useGemini && settings.apiKey;
+    return (
+      <button
+        onClick={onOpen}
+        className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-semibold ${
+          active ? "border-neon-violet/40 bg-neon-violet/10 text-neon-violet" : "border-white/10 bg-base-700/60 text-slate-400"
+        }`}
+        title="AI beállítások"
+      >
+        <Icon.Sparkle className="h-3.5 w-3.5" />
+        {active ? `Gemini (${settings.model.replace("gemini-", "")})` : "Beépített motor"}
+        <Icon.Cog className="h-3.5 w-3.5 opacity-70" />
+      </button>
+    );
+  }
+
   function CoachPage({ state, actions, now }) {
     const { send, applyAction } = useCoach(state, actions, now);
+    const [settingsOpen, setSettingsOpen] = useState(false);
     return (
       <div className="animate-fade-in">
         <PageHeader
           title="AI Coach"
           subtitle="Személyre szabott tanácsadás a céljaid és mai edzésed ismeretében"
-          action={state.chat.length ? <Button variant="ghost" onClick={actions.chatClear}>Előzmény törlése</Button> : null}
+          action={
+            <div className="flex items-center gap-2">
+              <CoachStatusPill settings={state.settings} onOpen={() => setSettingsOpen(true)} />
+              {state.chat.length > 0 && <Button variant="ghost" onClick={actions.chatClear}>Előzmény törlése</Button>}
+            </div>
+          }
         />
         <div className="glass flex h-[62vh] flex-col rounded-2xl p-4 sm:p-5">
           <ChatMessages chat={state.chat} onApply={applyAction} />
@@ -650,6 +856,13 @@
             <ChatInput onSend={send} />
           </div>
         </div>
+
+        <AISettingsModal
+          open={settingsOpen}
+          onClose={() => setSettingsOpen(false)}
+          settings={state.settings}
+          onSave={actions.setSettings}
+        />
       </div>
     );
   }
@@ -657,7 +870,9 @@
   /* ---- Floating chat widget --------------------------------------------- */
   function ChatWidget({ state, actions, now }) {
     const [open, setOpen] = useState(false);
+    const [settingsOpen, setSettingsOpen] = useState(false);
     const { send, applyAction } = useCoach(state, actions, now);
+    const geminiActive = state.settings.useGemini && state.settings.apiKey;
 
     return (
       <>
@@ -680,12 +895,20 @@
                 </span>
                 <div>
                   <div className="text-sm font-bold">AI Coach</div>
-                  <div className="flex items-center gap-1 text-[10px] text-neon-green"><span className="h-1.5 w-1.5 rounded-full bg-neon-green" /> Online</div>
+                  <div className="flex items-center gap-1 text-[10px] text-neon-green">
+                    <span className="h-1.5 w-1.5 rounded-full bg-neon-green" />
+                    {geminiActive ? `Gemini (${state.settings.model.replace("gemini-", "")})` : "Beépített motor"}
+                  </div>
                 </div>
               </div>
-              <button onClick={() => setOpen(false)} className="rounded-lg p-1.5 text-slate-400 hover:bg-white/10 hover:text-white">
-                <Icon.Close className="h-5 w-5" />
-              </button>
+              <div className="flex items-center gap-1">
+                <button onClick={() => setSettingsOpen(true)} className="rounded-lg p-1.5 text-slate-400 hover:bg-white/10 hover:text-white" title="AI beállítások">
+                  <Icon.Cog className="h-5 w-5" />
+                </button>
+                <button onClick={() => setOpen(false)} className="rounded-lg p-1.5 text-slate-400 hover:bg-white/10 hover:text-white">
+                  <Icon.Close className="h-5 w-5" />
+                </button>
+              </div>
             </div>
             <div className="flex flex-1 flex-col overflow-hidden p-3">
               <ChatMessages chat={state.chat} onApply={applyAction} compact />
@@ -704,6 +927,13 @@
             </div>
           </div>
         )}
+
+        <AISettingsModal
+          open={settingsOpen}
+          onClose={() => setSettingsOpen(false)}
+          settings={state.settings}
+          onSave={actions.setSettings}
+        />
       </>
     );
   }
