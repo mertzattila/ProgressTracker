@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="hu" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0a0a0f" />
+    <title>CaliForge — Calisthenics Edzéstervező</title>
+    <meta
+      name="description"
+      content="Intelligens calisthenics edzéstervező és célkövető platform AI asszisztenssel."
+    />
+
+    <!-- React + ReactDOM (UMD) -->
+    <script
+      crossorigin
+      src="https://unpkg.com/react@18/umd/react.production.min.js"
+    ></script>
+    <script
+      crossorigin
+      src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"
+    ></script>
+
+    <!-- Babel for in-browser JSX -->
+    <script src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
+
+    <!-- Tailwind CSS (CDN, with config) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            colors: {
+              base: {
+                900: "#07070b",
+                800: "#0d0d14",
+                700: "#13131d",
+                600: "#1b1b28",
+                500: "#242433",
+              },
+              neon: {
+                blue: "#38bdf8",
+                violet: "#a855f7",
+                green: "#22e5a4",
+              },
+            },
+            fontFamily: {
+              sans: ["Inter", "system-ui", "sans-serif"],
+              display: ["Space Grotesk", "Inter", "sans-serif"],
+            },
+            boxShadow: {
+              glow: "0 0 24px -4px rgba(168,85,247,0.45)",
+              "glow-blue": "0 0 24px -4px rgba(56,189,248,0.45)",
+              "glow-green": "0 0 24px -4px rgba(34,229,164,0.45)",
+            },
+            keyframes: {
+              "fade-in": {
+                "0%": { opacity: 0, transform: "translateY(8px)" },
+                "100%": { opacity: 1, transform: "translateY(0)" },
+              },
+              "slide-up": {
+                "0%": { opacity: 0, transform: "translateY(24px)" },
+                "100%": { opacity: 1, transform: "translateY(0)" },
+              },
+              "pulse-ring": {
+                "0%": { transform: "scale(0.9)", opacity: 0.7 },
+                "100%": { transform: "scale(1.6)", opacity: 0 },
+              },
+            },
+            animation: {
+              "fade-in": "fade-in 0.35s ease-out",
+              "slide-up": "slide-up 0.4s ease-out",
+              "pulse-ring": "pulse-ring 1.6s ease-out infinite",
+            },
+          },
+        },
+      };
+    </script>
+
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap"
+      rel="stylesheet"
+    />
+
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body class="bg-base-900 text-slate-100 font-sans antialiased">
+    <div id="root">
+      <div class="flex h-screen w-screen items-center justify-center">
+        <div class="flex flex-col items-center gap-4">
+          <div
+            class="h-10 w-10 animate-spin rounded-full border-2 border-neon-violet border-t-transparent"
+          ></div>
+          <p class="text-sm text-slate-400">CaliForge betöltése…</p>
+        </div>
+      </div>
+    </div>
+
+    <!--
+      App source. Loaded as CLASSIC babel scripts (NOT modules) so they share
+      the global window.CF namespace and run in listed order. Babel standalone
+      executes text/babel scripts in document order once the page is parsed.
+    -->
+    <script type="text/babel" src="./src/data.js"></script>
+    <script type="text/babel" src="./src/planner.js"></script>
+    <script type="text/babel" src="./src/coach.js"></script>
+    <script type="text/babel" src="./src/store.js"></script>
+    <script type="text/babel" src="./src/components.js"></script>
+    <script type="text/babel" src="./src/app.js"></script>
+  </body>
+</html>
